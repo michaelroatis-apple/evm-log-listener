@@ -1,0 +1,70 @@
+# /etc/systemd/system/indexer.service
+#
+# Resilient EVM Log Listener — production daemonization.
+#
+# Setup on Ubuntu:
+#   sudo useradd --system --no-create-home --shell /usr/sbin/nologin indexer
+#   sudo mkdir -p /opt/indexer && sudo chown indexer:indexer /opt/indexer
+#   # deploy built app to /opt/indexer (dist/, node_modules/, package.json)
+#   sudo install -m 600 -o root indexer.env /etc/indexer/indexer.env
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now indexer
+#
+# Logs: journalctl -u indexer -f
+
+[Unit]
+Description=Resilient EVM Log Listener (USDC Transfer indexer)
+Documentation=https://github.com/michaelroatis/evm-log-listener
+# Start after networking and Redis if co-located on this host.
+After=network-online.target redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node /opt/indexer/dist/index.js
+WorkingDirectory=/opt/indexer
+
+# --- Non-root user context ---
+User=indexer
+Group=indexer
+
+# --- Environment variable handling ---
+# Secrets (RPC URLs with API keys, Redis auth) live in a root-owned file
+# with mode 600 — never in the unit file, never in the repo.
+EnvironmentFile=/etc/indexer/indexer.env
+Environment=NODE_ENV=production
+
+# --- Automatic restart on crash / uncaught exception ---
+# Node exits non-zero on an uncaught exception; Restart=always brings the
+# service back regardless of exit reason. StartLimit* prevents a hot crash
+# loop from spinning the CPU: 5 rapid failures within 60s pause the unit.
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# --- Graceful shutdown ---
+# The process handles SIGTERM (closes WSS + Redis cleanly) before exiting.
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+# --- Resource limits ---
+MemoryMax=512M
+LimitNOFILE=65536
+
+# --- Hardening ---
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+# --- Logging (stdout/stderr -> journald) ---
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=indexer
+
+[Install]
+WantedBy=multi-user.target
