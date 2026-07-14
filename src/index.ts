@@ -1,25 +1,23 @@
 import { EventListener } from "./listener.js";
 import { logger } from "./logger.js";
+import { MetricsWriter } from "./metrics.js";
+import { createRedis } from "./redis.js";
+
+const redis = createRedis();
+const metrics = new MetricsWriter(redis);
 
 const listener = new EventListener(async (batch) => {
-  // Placeholder consumer — replaced by the Redis metrics writer next.
-  for (const t of batch.transfers.slice(0, 3)) {
-    logger.debug("transfer", {
-      from: t.from,
-      to: t.to,
-      value: t.value.toString(),
-      block: t.blockNumber.toString(),
-    });
-  }
+  await metrics.recordBatch(batch);
 });
 
 listener.start();
 
-function shutdown(signal: string) {
+async function shutdown(signal: string) {
   logger.info("shutting down", { signal });
   listener.stop();
+  await redis.quit().catch(() => redis.disconnect());
   process.exit(0);
 }
 
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));
