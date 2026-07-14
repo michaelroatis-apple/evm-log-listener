@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>USDC Transfer Indexer</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #2f81f7;
+    --green: #3fb950; --red: #f85149; --amber: #d29922;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif;
+    padding: 24px; max-width: 1080px; margin: 0 auto;
+  }
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+  h1 { font-size: 20px; font-weight: 600; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .pill {
+    margin-left: auto; padding: 3px 12px; border-radius: 999px;
+    font-size: 12px; font-weight: 600; border: 1px solid var(--border);
+  }
+  .pill.ok { color: var(--green); border-color: var(--green); }
+  .pill.bad { color: var(--red); border-color: var(--red); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+  .card .value { font-size: 26px; font-weight: 650; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .card .value.spike-on { color: var(--red); }
+  .card .value.spike-off { color: var(--green); }
+  .row { display: grid; grid-template-columns: 3fr 2fr; gap: 12px; }
+  @media (max-width: 760px) { .row { grid-template-columns: 1fr; } }
+  h2 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 12px; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  th { color: var(--muted); font-weight: 500; }
+  td.num, th.num { text-align: right; }
+  a { color: var(--accent); text-decoration: none; }
+  .mono { font-family: ui-monospace, monospace; font-size: 12.5px; }
+  footer { margin-top: 16px; color: var(--muted); font-size: 12px; }
+  #err { color: var(--red); margin-bottom: 12px; display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>USDC Transfer Indexer</h1>
+  <span class="sub">Ethereum mainnet · rolling 60 min</span>
+  <span id="status" class="pill">connecting…</span>
+</header>
+
+<div id="err"></div>
+
+<div class="grid">
+  <div class="card"><div class="label">Volume (1h)</div><div class="value" id="volume">–</div></div>
+  <div class="card"><div class="label">Transfers (1h)</div><div class="value" id="transfers">–</div></div>
+  <div class="card"><div class="label">Spike</div><div class="value" id="spike">–</div></div>
+  <div class="card"><div class="label">Last block</div><div class="value" id="block">–</div></div>
+</div>
+
+<div class="row">
+  <div class="card">
+    <h2>Volume per minute (USDC)</h2>
+    <canvas id="chart" height="220"></canvas>
+  </div>
+  <div class="card">
+    <h2>Top senders (1h)</h2>
+    <table>
+      <thead><tr><th>#</th><th>Address</th><th class="num">Transfers</th></tr></thead>
+      <tbody id="senders"><tr><td colspan="3" class="sub">waiting for data…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<footer>Auto-refreshes every 10s · <span id="updated"></span></footer>
+
+<script>
+const fmt = new Intl.NumberFormat("en-US");
+let chart;
+
+function short(addr) { return addr.slice(0, 6) + "…" + addr.slice(-4); }
+
+function renderChart(volumeByMinute) {
+  const labels = volumeByMinute.map(v => {
+    const d = new Date(v.minute * 60000);
+    return d.getUTCHours().toString().padStart(2, "0") + ":" + d.getUTCMinutes().toString().padStart(2, "0");
+  });
+  const data = volumeByMinute.map(v => Number(BigInt(v.volume) / 1000000n));
+  if (!chart) {
+    chart = new Chart(document.getElementById("chart"), {
+      type: "bar",
+      data: { labels, datasets: [{ data, backgroundColor: "#2f81f7", borderRadius: 2 }] },
+      options: {
+        animation: false,
+        plugins: { legend: { display: false }, tooltip: { callbacks: {
+          label: ctx => "$" + fmt.format(ctx.parsed.y)
+        }}},
+        scales: {
+          x: { ticks: { color: "#8b949e", maxTicksLimit: 8 }, grid: { display: false } },
+          y: { ticks: { color: "#8b949e", callback: v => "$" + fmt.format(v) }, grid: { color: "#21262d" } }
+        }
+      }
+    });
+  } else {
+    chart.data.labels = labels;
+    chart.data.datasets[0].data = data;
+    chart.update();
+  }
+}
+
+async function refresh() {
+  const errEl = document.getElementById("err");
+  try {
+    const res = await fetch("/api/metrics");
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const m = await res.json();
+    errEl.style.display = "none";
+
+    document.getElementById("volume").textContent =
+      "$" + fmt.format(Math.round(Number(m.totalVolumeLastHourFormatted)));
+    document.getElementById("transfers").textContent = fmt.format(m.totalTransfersLastHour);
+
+    const spikeEl = document.getElementById("spike");
+    spikeEl.textContent = m.spike.detected ? "DETECTED" : "none";
+    spikeEl.className = "value " + (m.spike.detected ? "spike-on" : "spike-off");
+    spikeEl.title = m.spike.ratio != null ? "last minute = " + m.spike.ratio + "x trailing avg" : "";
+
+    document.getElementById("block").textContent = m.listener.lastProcessedBlock
+      ? fmt.format(Number(m.listener.lastProcessedBlock)) : "–";
+
+    const st = document.getElementById("status");
+    st.textContent = m.listener.wsConnected ? "● live" : "○ reconnecting";
+    st.className = "pill " + (m.listener.wsConnected ? "ok" : "bad");
+
+    const rows = m.topSenders.map((s, i) =>
+      `<tr><td>${i + 1}</td>` +
+      `<td class="mono"><a href="https://etherscan.io/address/${s.address}" target="_blank" rel="noopener">${short(s.address)}</a></td>` +
+      `<td class="num">${fmt.format(s.transfers)}</td></tr>`
+    ).join("");
+    document.getElementById("senders").innerHTML =
+      rows || '<tr><td colspan="3" class="sub">no transfers yet</td></tr>';
+
+    renderChart(m.volumeByMinute);
+    document.getElementById("updated").textContent = "updated " + new Date().toLocaleTimeString();
+  } catch (e) {
+    errEl.textContent = "Failed to load metrics: " + e.message;
+    errEl.style.display = "block";
+    const st = document.getElementById("status");
+    st.textContent = "○ offline";
+    st.className = "pill bad";
+  }
+}
+
+refresh();
+setInterval(refresh, 10000);
+</script>
+</body>
+</html>

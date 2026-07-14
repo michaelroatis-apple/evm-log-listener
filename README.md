@@ -73,6 +73,28 @@ the last complete minute against the trailing average (flagged at >3x).
 a single pipeline — one Redis round-trip per block, regardless of how many
 transfers a busy block contains.
 
+## Dashboard & API
+
+With the service running, open **http://localhost:3000** for a live
+dashboard (volume/minute chart, top-5 senders, spike indicator, listener
+health). Programmatic access:
+
+- `GET /api/metrics` — full rolling 1h snapshot as JSON
+- `GET /healthz` — liveness (200 when Redis is ready; includes listener status)
+
+## Deploying to Railway
+
+The repo ships with `railway.json` (build + start commands, `/healthz`
+healthcheck, always-restart policy). To deploy:
+
+1. Push this repo to GitHub and create a Railway project from it.
+2. Add a **Redis** service to the project.
+3. On the indexer service, set `REDIS_URL` to Railway's Redis reference
+   variable (`${{Redis.REDIS_URL}}`). All other variables have workable
+   defaults; set `RPC_WSS_URL`/`RPC_HTTP_URL` to a keyed endpoint for
+   better rate limits.
+4. Every push to `main` deploys automatically.
+
 ## Production daemonization (systemd)
 
 The unit file is at [`deploy/indexer.service`](deploy/indexer.service). It
