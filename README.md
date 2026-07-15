@@ -123,5 +123,5 @@ npm run dev        # run with hot reload (tsx)
 npm run build      # compile to dist/
 npm start          # run compiled output
 npm run typecheck  # tsc --noEmit
-npx tsx scripts/verify-metrics.ts  # metrics logic assertions (mocked Redis)
+npm run verify     # assertions: backoff/retry, metrics aggregation, HTTP endpoints
 ```

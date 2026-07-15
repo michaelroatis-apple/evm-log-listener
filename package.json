@@ -11,7 +11,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify": "tsx scripts/verify-resilience.ts && tsx scripts/verify-metrics.ts && tsx scripts/verify-server.ts"
   },
   "dependencies": {
     "ioredis": "^5.4.1",
@@ -19,6 +20,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "ioredis-mock": "^8.9.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
   }
