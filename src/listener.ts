@@ -55,6 +55,13 @@ const ROTATE_WSS_AFTER = 3;
 
 const RETRY = { baseMs: 500, capMs: 30_000, maxAttempts: 5 };
 
+/** Providers are load-balanced clusters: the backend announcing a head over
+ *  WSS isn't necessarily the backend answering the next HTTP call, and the
+ *  latter can lag by a beat. Give the cluster a moment to converge before
+ *  fetching a freshly announced head's logs. Live path only — backfilled
+ *  blocks are old enough that every backend has them. */
+const HEAD_SETTLE_MS = 500;
+
 /** Cap on startup backfill from a persisted cursor (~1h at 12s blocks).
  *  The metric window is only 60 minutes, so blocks older than that carry
  *  no useful signal — and ingestion-time bucketing would misplace them. */
@@ -264,6 +271,10 @@ export class EventListener {
         skippedBlocks: (skippedTo - fromBlock).toString(),
       });
       fromBlock = skippedTo;
+    }
+
+    if (fromBlock === head) {
+      await sleep(HEAD_SETTLE_MS);
     }
 
     if (head - fromBlock > 0n) {

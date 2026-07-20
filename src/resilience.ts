@@ -92,7 +92,10 @@ export async function withRetry<T>(
       lastError = err;
       const rateLimited = isRateLimit(err);
       const delay = backoffDelay(attempt, opts) + (rateLimited ? 2_000 : 0);
-      logger.warn(`${opts.label} failed, retrying`, {
+      // A single retry is normal operation (e.g. provider head-lag); only
+      // repeated failures warrant warning-level attention.
+      const log = attempt === 0 ? logger.debug : logger.warn;
+      log(`${opts.label} failed, retrying`, {
         attempt: attempt + 1,
         maxAttempts: opts.maxAttempts,
         delayMs: delay,
