@@ -130,6 +130,22 @@ healthcheck, always-restart policy). To deploy:
    better rate limits.
 4. Every push to `main` deploys automatically.
 
+### A note on RPC endpoints from cloud hosts
+
+Observed in production while running this service: free public RPCs
+(publicnode, drpc, llamarpc) frequently **refuse WebSocket upgrades from
+datacenter/cloud egress IPs** while still serving plain HTTPS — long-lived
+WSS connections are the first thing free tiers shed. From a residential IP
+everything works; from Railway/AWS/GCP, expect WSS refusals.
+
+Implications:
+
+- The service tolerates this: it rotates providers, then degrades to HTTP
+  head polling with no data loss (the dashboard shows the degraded mode).
+- For push-based WSS in cloud deployments, put a **keyed endpoint** (free
+  Alchemy/Infura tier is enough) first in `RPC_WSS_URLS`, keeping the free
+  endpoints behind it as failover depth.
+
 ## Production daemonization (systemd)
 
 The unit file is at [`deploy/indexer.service`](deploy/indexer.service). It
