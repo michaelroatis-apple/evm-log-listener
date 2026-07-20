@@ -4,6 +4,18 @@ A real-time event indexing service that listens for live USDC `Transfer`
 events on Ethereum mainnet, survives infrastructure hazards (websocket
 drops, RPC rate-limiting), and maintains rolling 1-hour metrics in Redis.
 
+**Live demo:** [evm-log-listener-production.up.railway.app](https://evm-log-listener-production.up.railway.app)
+— volume, top senders/receivers, largest transfers, spike detection, and
+listener health, refreshed live from mainnet. Deployed from this repo via
+Railway on every push to `main`.
+
+> **Field-tested resiliency:** during its first weekend deployed, the
+> primary public RPC (publicnode) hard-blocked the platform's egress IPs —
+> 14,000+ consecutive websocket failures over ~3 days. The service never
+> crashed, kept retrying with capped jittered backoff, and reported itself
+> unhealthy truthfully. The incident motivated the multi-provider endpoint
+> failover it now ships with: recovery from that scenario takes ~10 seconds.
+
 ## Quick start
 
 ```bash
@@ -64,6 +76,10 @@ range simply widens. **No block is ever skipped.**
   node limits after long outages.
 - Redis outages are absorbed by ioredis offline queueing — metric writes
   issued while Redis is down flush on reconnect.
+- The block cursor is persisted to Redis, so restarts (deploys, crashes,
+  systemd restarts) resume where the previous run stopped and backfill
+  their own downtime — capped at the metric window (~1h of blocks), since
+  older data would be outside the rolling window anyway.
 
 **Redis metrics (rolling 1 hour).** Per-minute time buckets, each with a
 65-minute TTL so the window cleans itself up with no cron:
@@ -71,8 +87,11 @@ range simply widens. **No block is ever skipped.**
 | Key | Type | Contents |
 |---|---|---|
 | `senders:{minute}` | ZSET | transfer count per sender address |
+| `receivers:{minute}` | ZSET | transfer count per receiver address |
+| `largest:{minute}` | ZSET | top transfers by value (txHash-keyed, capped at 20) |
 | `volume:{minute}` | STRING | raw token units transferred |
 | `transfers:{minute}` | STRING | transfer count |
+| `cursor:lastProcessedBlock` | STRING | resume point across restarts |
 
 Reads: top-5 senders via `ZUNIONSTORE` across the 60 buckets (aggregation
 stays server-side); volume series via one `MGET`. Spike detection compares
