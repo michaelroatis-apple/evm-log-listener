@@ -9,12 +9,15 @@ drops, RPC rate-limiting), and maintains rolling 1-hour metrics in Redis.
 listener health, refreshed live from mainnet. Deployed from this repo via
 Railway on every push to `main`.
 
-> **Field-tested resiliency:** during its first weekend deployed, the
-> primary public RPC (publicnode) hard-blocked the platform's egress IPs —
-> 14,000+ consecutive websocket failures over ~3 days. The service never
-> crashed, kept retrying with capped jittered backoff, and reported itself
-> unhealthy truthfully. The incident motivated the multi-provider endpoint
-> failover it now ships with: recovery from that scenario takes ~10 seconds.
+> **Field-tested resiliency:** this service survived two real production
+> incidents while deployed. First, the primary public RPC hard-blocked the
+> platform's egress IPs for a weekend (14,000+ consecutive websocket
+> failures — the service kept retrying with capped jittered backoff and
+> reported itself unhealthy truthfully). Later, *every* free provider
+> refused WebSocket upgrades from datacenter IPs — the service rotated
+> providers, then degraded to HTTP head polling with **zero data loss**
+> while the dashboard honestly reported the degraded mode. Both incidents
+> shaped the failover + fallback design it now ships with.
 
 ## Quick start
 
@@ -42,6 +45,8 @@ You should see live block processing within seconds:
 WSS (block heads) ──> EventListener ──> getLogs(range) ──> MetricsWriter ──> Redis
                         │                    HTTP                             │
                         └── reconnect w/ backoff + jitter                     └── per-minute buckets, 65min TTL
+                        └── multi-provider endpoint failover                  └── persistent block cursor
+                        └── HTTP head-polling fallback
                         └── stale-head watchdog
                         └── gap backfill after outages
 ```
@@ -100,20 +105,24 @@ range simply widens. **No block is ever skipped.**
 | `transfers:{minute}` | STRING | transfer count |
 | `cursor:lastProcessedBlock` | STRING | resume point across restarts |
 
-Reads: top-5 senders via `ZUNIONSTORE` across the 60 buckets (aggregation
-stays server-side); volume series via one `MGET`. Spike detection compares
-the last complete minute against the trailing average (flagged at >3x).
+Reads: top-5 senders, receivers, and largest transfers via `ZUNIONSTORE`
+across the 60 buckets (aggregation stays server-side — full member sets
+never cross the network); volume series via one `MGET`. Spike detection
+compares the last complete minute against the trailing average (flagged
+at >3x).
 
 **Burst optimization.** Transfers are pre-aggregated in-process per block
-(one `ZINCRBY` per unique sender, one `INCRBY` for volume), then flushed in
-a single pipeline — one Redis round-trip per block, regardless of how many
+(one `ZINCRBY` per unique sender/receiver, the batch's own top transfers,
+one `INCRBY` each for volume and count), then flushed in a single
+pipeline — one Redis round-trip per block, regardless of how many
 transfers a busy block contains.
 
 ## Dashboard & API
 
 With the service running, open **http://localhost:3000** for a live
-dashboard (volume/minute chart, top-5 senders, spike indicator, listener
-health). Programmatic access:
+dashboard: volume/minute chart, top-5 senders and receivers, largest
+transfers of the hour, spike indicator, and a listener status line (active
+RPC endpoint, degraded-mode flag, reconnect attempts). Programmatic access:
 
 - `GET /api/metrics` — full rolling 1h snapshot as JSON
 - `GET /healthz` — liveness (200 when Redis is ready; includes listener status)
