@@ -2,24 +2,12 @@
  * Sandbox smoke test for the HTTP layer using mocked Redis and a stub
  * listener. Run with: npx tsx scripts/verify-server.ts
  */
-// @ts-expect-error no types shipped
-import RedisMock from "ioredis-mock";
-import type { Redis } from "ioredis";
 import { MetricsReader, MetricsWriter } from "../src/metrics.js";
 import { startServer } from "../src/server.js";
 import type { EventListener } from "../src/listener.js";
+import { createMockRedis } from "./redis-mock.js";
 
-const redis = new RedisMock() as unknown as Redis;
-(redis as any).zunionstore = async (dest: string, _n: number, ...keys: string[]) => {
-  const union = new Map<string, number>();
-  for (const key of keys) {
-    const raw: string[] = await (redis as any).zrange(key, 0, -1, "WITHSCORES");
-    for (let i = 0; i < raw.length; i += 2)
-      union.set(raw[i]!, (union.get(raw[i]!) ?? 0) + Number(raw[i + 1]));
-  }
-  for (const [m, s] of union) await redis.zadd(dest, s, m);
-  return union.size;
-};
+const redis = createMockRedis();
 Object.defineProperty(redis, "status", { value: "ready" });
 
 const stubListener = {
@@ -36,9 +24,7 @@ async function main() {
   await writer.recordBatch({
     fromBlock: 1n,
     toBlock: 1n,
-    transfers: [
-      { from: "0xAA", to: "0xBB", value: 5_000_000n, blockNumber: 1n, txHash: "0x00" },
-    ],
+    transfers: [{ from: "0xAA", to: "0xBB", value: 5_000_000n, txHash: "0x00" }],
   });
 
   const server = startServer(stubListener, new MetricsReader(redis), redis);

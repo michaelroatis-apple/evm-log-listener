@@ -30,7 +30,7 @@ const largestKey = (minute: number) => `largest:${minute}`;
 /** Max entries kept per largest-transfers bucket. */
 const LARGEST_PER_BUCKET = 20;
 
-export const currentMinute = () => Math.floor(Date.now() / 60_000);
+const currentMinute = () => Math.floor(Date.now() / 60_000);
 
 export class MetricsWriter {
   constructor(private readonly redis: Redis) {}

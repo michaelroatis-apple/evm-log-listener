@@ -4,7 +4,9 @@ services:
     container_name: indexer-redis
     ports:
       - "6379:6379"
-    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    # volatile-lru (not allkeys-lru): metric buckets all carry TTLs and may be
+    # evicted under pressure, but the persistent block cursor must never be.
+    command: redis-server --maxmemory 256mb --maxmemory-policy volatile-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s

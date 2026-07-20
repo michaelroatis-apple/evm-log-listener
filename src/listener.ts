@@ -10,7 +10,7 @@ import { config } from "./config.js";
 import { logger } from "./logger.js";
 import { backoffDelay, EndpointPool, sleep, withRetry } from "./resilience.js";
 
-export const transferEvent = parseAbiItem(
+const transferEvent = parseAbiItem(
   "event Transfer(address indexed from, address indexed to, uint256 value)",
 );
 
@@ -18,7 +18,6 @@ export interface Transfer {
   from: string;
   to: string;
   value: bigint;
-  blockNumber: bigint;
   txHash: string;
 }
 
@@ -324,7 +323,6 @@ export class EventListener {
       from: log.args.from as string,
       to: log.args.to as string,
       value: log.args.value as bigint,
-      blockNumber: log.blockNumber,
       txHash: log.transactionHash,
     }));
 

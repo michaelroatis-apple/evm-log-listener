@@ -120,7 +120,7 @@ healthcheck, always-restart policy). To deploy:
 2. Add a **Redis** service to the project.
 3. On the indexer service, set `REDIS_URL` to Railway's Redis reference
    variable (`${{Redis.REDIS_URL}}`). All other variables have workable
-   defaults; set `RPC_WSS_URL`/`RPC_HTTP_URL` to a keyed endpoint for
+   defaults; set `RPC_WSS_URLS`/`RPC_HTTP_URLS` to keyed endpoints for
    better rate limits.
 4. Every push to `main` deploys automatically.
 

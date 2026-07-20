@@ -2,26 +2,11 @@
  * Sandbox verification of the metrics layer against ioredis-mock.
  * Not part of the shipped service — run with: npx tsx scripts/verify-metrics.ts
  */
-// @ts-expect-error no types shipped
-import RedisMock from "ioredis-mock";
-import type { Redis } from "ioredis";
 import { MetricsWriter, MetricsReader } from "../src/metrics.js";
 import type { TransferBatch } from "../src/listener.js";
+import { createMockRedis } from "./redis-mock.js";
 
-const redis = new RedisMock() as unknown as Redis;
-
-// ioredis-mock doesn't implement ZUNIONSTORE; shim it (sum scores across keys).
-(redis as any).zunionstore = async (dest: string, _numkeys: number, ...keys: string[]) => {
-  const union = new Map<string, number>();
-  for (const key of keys) {
-    const raw: string[] = await (redis as any).zrange(key, 0, -1, "WITHSCORES");
-    for (let i = 0; i < raw.length; i += 2) {
-      union.set(raw[i]!, (union.get(raw[i]!) ?? 0) + Number(raw[i + 1]));
-    }
-  }
-  for (const [member, score] of union) await redis.zadd(dest, score, member);
-  return union.size;
-};
+const redis = createMockRedis();
 const writer = new MetricsWriter(redis);
 const reader = new MetricsReader(redis);
 
@@ -33,7 +18,6 @@ function batch(transfers: Array<[string, string, bigint]>, block: bigint): Trans
       from,
       to,
       value,
-      blockNumber: block,
       txHash: `0x${block.toString(16).padStart(8, "0")}${i.toString(16).padStart(56, "0")}`,
     })),
   };
