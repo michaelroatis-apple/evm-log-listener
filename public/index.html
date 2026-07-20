@@ -17,7 +17,7 @@
     font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif;
     padding: 24px; max-width: 1080px; margin: 0 auto;
   }
-  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 4px; flex-wrap: wrap; }
   h1 { font-size: 20px; font-weight: 600; }
   .sub { color: var(--muted); font-size: 13px; }
   .pill {
@@ -25,15 +25,20 @@
     font-size: 12px; font-weight: 600; border: 1px solid var(--border);
   }
   .pill.ok { color: var(--green); border-color: var(--green); }
+  .pill.warn { color: var(--amber); border-color: var(--amber); }
   .pill.bad { color: var(--red); border-color: var(--red); }
+  #statusline { color: var(--muted); font-size: 12px; margin-bottom: 16px; min-height: 18px; }
+  #statusline .mono { color: var(--text); }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 12px; }
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
   .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
   .card .value { font-size: 26px; font-weight: 650; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .card .hint { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
   .card .value.spike-on { color: var(--red); }
   .card .value.spike-off { color: var(--green); }
-  .row { display: grid; grid-template-columns: 3fr 2fr; gap: 12px; }
-  @media (max-width: 760px) { .row { grid-template-columns: 1fr; } }
+  .row { display: grid; grid-template-columns: 3fr 2fr; gap: 12px; margin-bottom: 12px; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 760px) { .row, .row2 { grid-template-columns: 1fr; } }
   h2 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 12px; }
   table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
   th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); font-size: 13px; }
@@ -51,13 +56,17 @@
   <span class="sub">Ethereum mainnet · rolling 60 min</span>
   <span id="status" class="pill">connecting…</span>
 </header>
+<div id="statusline"></div>
 
 <div id="err"></div>
 
 <div class="grid">
   <div class="card"><div class="label">Volume (1h)</div><div class="value" id="volume">–</div></div>
   <div class="card"><div class="label">Transfers (1h)</div><div class="value" id="transfers">–</div></div>
-  <div class="card"><div class="label">Spike</div><div class="value" id="spike">–</div></div>
+  <div class="card">
+    <div class="label">Spike</div><div class="value" id="spike">–</div>
+    <div class="hint" id="spikehint"></div>
+  </div>
   <div class="card"><div class="label">Last block</div><div class="value" id="block">–</div></div>
 </div>
 
@@ -75,13 +84,33 @@
   </div>
 </div>
 
+<div class="row2">
+  <div class="card">
+    <h2>Top receivers (1h)</h2>
+    <table>
+      <thead><tr><th>#</th><th>Address</th><th class="num">Transfers</th></tr></thead>
+      <tbody id="receivers"><tr><td colspan="3" class="sub">waiting for data…</td></tr></tbody>
+    </table>
+  </div>
+  <div class="card">
+    <h2>Largest transfers (1h)</h2>
+    <table>
+      <thead><tr><th>Tx</th><th>From → To</th><th class="num">Amount</th></tr></thead>
+      <tbody id="largest"><tr><td colspan="3" class="sub">waiting for data…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
 <footer>Auto-refreshes every 10s · <span id="updated"></span></footer>
 
 <script>
 const fmt = new Intl.NumberFormat("en-US");
 let chart;
 
-function short(addr) { return addr.slice(0, 6) + "…" + addr.slice(-4); }
+const short = (a) => a.slice(0, 6) + "…" + a.slice(-4);
+const addrLink = (a) =>
+  `<a class="mono" href="https://etherscan.io/address/${a}" target="_blank" rel="noopener">${short(a)}</a>`;
+const usd = (rawStr) => "$" + fmt.format(Number(BigInt(rawStr) / 1000000n));
 
 function renderChart(volumeByMinute) {
   const labels = volumeByMinute.map(v => {
@@ -111,6 +140,26 @@ function renderChart(volumeByMinute) {
   }
 }
 
+function addressRows(list) {
+  return list.map((s, i) =>
+    `<tr><td>${i + 1}</td><td>${addrLink(s.address)}</td>` +
+    `<td class="num">${fmt.format(s.transfers)}</td></tr>`
+  ).join("") || '<tr><td colspan="3" class="sub">no transfers yet</td></tr>';
+}
+
+function statusLine(l) {
+  let host = "";
+  try { host = new URL(l.wssEndpoint).host; } catch { host = l.wssEndpoint; }
+  const parts = [`RPC: <span class="mono">${host}</span>`];
+  if (l.reconnectAttempts > 0) parts.push(`reconnect attempts: ${l.reconnectAttempts}`);
+  if (l.lastBlockAt) {
+    const ageS = Math.round((Date.now() - new Date(l.lastBlockAt).getTime()) / 1000);
+    parts.push(`last head ${ageS}s ago`);
+    if (l.wsConnected && ageS > 30) parts.push("catching up…");
+  }
+  return parts.join(" · ");
+}
+
 async function refresh() {
   const errEl = document.getElementById("err");
   try {
@@ -126,22 +175,25 @@ async function refresh() {
     const spikeEl = document.getElementById("spike");
     spikeEl.textContent = m.spike.detected ? "DETECTED" : "none";
     spikeEl.className = "value " + (m.spike.detected ? "spike-on" : "spike-off");
-    spikeEl.title = m.spike.ratio != null ? "last minute = " + m.spike.ratio + "x trailing avg" : "";
+    document.getElementById("spikehint").textContent =
+      m.spike.ratio != null ? `last minute = ${m.spike.ratio}x trailing avg` : "";
 
     document.getElementById("block").textContent = m.listener.lastProcessedBlock
       ? fmt.format(Number(m.listener.lastProcessedBlock)) : "–";
 
     const st = document.getElementById("status");
     st.textContent = m.listener.wsConnected ? "● live" : "○ reconnecting";
-    st.className = "pill " + (m.listener.wsConnected ? "ok" : "bad");
+    st.className = "pill " + (m.listener.wsConnected ? "ok" : "warn");
+    document.getElementById("statusline").innerHTML = statusLine(m.listener);
 
-    const rows = m.topSenders.map((s, i) =>
-      `<tr><td>${i + 1}</td>` +
-      `<td class="mono"><a href="https://etherscan.io/address/${s.address}" target="_blank" rel="noopener">${short(s.address)}</a></td>` +
-      `<td class="num">${fmt.format(s.transfers)}</td></tr>`
-    ).join("");
-    document.getElementById("senders").innerHTML =
-      rows || '<tr><td colspan="3" class="sub">no transfers yet</td></tr>';
+    document.getElementById("senders").innerHTML = addressRows(m.topSenders);
+    document.getElementById("receivers").innerHTML = addressRows(m.topReceivers);
+
+    document.getElementById("largest").innerHTML = m.largestTransfers.map(t =>
+      `<tr><td><a class="mono" href="https://etherscan.io/tx/${t.txHash}" target="_blank" rel="noopener">${t.txHash.slice(0, 10)}…</a></td>` +
+      `<td>${addrLink(t.from)} → ${addrLink(t.to)}</td>` +
+      `<td class="num">${usd(t.value)}</td></tr>`
+    ).join("") || '<tr><td colspan="3" class="sub">no transfers yet</td></tr>';
 
     renderChart(m.volumeByMinute);
     document.getElementById("updated").textContent = "updated " + new Date().toLocaleTimeString();
