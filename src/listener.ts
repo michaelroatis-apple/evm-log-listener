@@ -113,6 +113,20 @@ export class EventListener {
   }
 
   async start(): Promise<void> {
+    // Failover only exists if the pools actually have somewhere to go.
+    // A config mistake here should announce itself at boot, not surface as
+    // an unexplained multi-hour outage when a provider blocks us.
+    logger.info("rpc endpoint pools", {
+      wssEndpoints: config.rpcWssUrls.length,
+      httpEndpoints: config.rpcHttpUrls.length,
+    });
+    if (config.rpcWssUrls.length < 2) {
+      logger.warn(
+        "single wss endpoint configured — no failover possible; set RPC_WSS_URLS to a comma-separated list",
+        { endpoint: config.rpcWssUrls[0] },
+      );
+    }
+
     if (this.cursorStore) {
       try {
         const stored = await this.cursorStore.load();
