@@ -2,7 +2,7 @@
  * Assertions for the backoff/retry logic.
  * Run with: npx tsx scripts/verify-resilience.ts
  */
-import { backoffDelay, withRetry } from "../src/resilience.js";
+import { backoffDelay, EndpointPool, withRetry } from "../src/resilience.js";
 
 function assert(cond: boolean, label: string) {
   if (!cond) {
@@ -58,6 +58,34 @@ async function main() {
     assert((err as Error).message.includes("429"), "original error preserved");
   }
   assert(threw && calls === 3, "withRetry gives up after maxAttempts");
+
+  // 4. EndpointPool rotates round-robin and wraps.
+  const pool = new EndpointPool(["a", "b", "c"]);
+  assert(pool.current === "a", "pool starts at first endpoint");
+  assert(pool.rotate() === "b" && pool.rotate() === "c", "pool rotates in order");
+  assert(pool.rotate() === "a", "pool wraps around");
+  let poolThrew = false;
+  try {
+    new EndpointPool([]);
+  } catch {
+    poolThrew = true;
+  }
+  assert(poolThrew, "empty pool rejected");
+
+  // 5. withRetry passes the attempt index so callers can rotate endpoints.
+  const seen: number[] = [];
+  await withRetry(
+    async (attempt) => {
+      seen.push(attempt);
+      if (attempt < 2) throw new Error("boom");
+      return "ok";
+    },
+    { baseMs: 1, capMs: 2, maxAttempts: 5, label: "rotation" },
+  );
+  assert(
+    seen.length === 3 && seen[0] === 0 && seen[1] === 1 && seen[2] === 2,
+    "withRetry exposes incrementing attempt index",
+  );
 
   console.log("\nAll resilience assertions passed.");
 }

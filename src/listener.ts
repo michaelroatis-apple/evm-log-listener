@@ -8,7 +8,7 @@ import {
 import { mainnet } from "viem/chains";
 import { config } from "./config.js";
 import { logger } from "./logger.js";
-import { backoffDelay, sleep, withRetry } from "./resilience.js";
+import { backoffDelay, EndpointPool, sleep, withRetry } from "./resilience.js";
 
 export const transferEvent = parseAbiItem(
   "event Transfer(address indexed from, address indexed to, uint256 value)",
@@ -33,6 +33,7 @@ export type BatchHandler = (batch: TransferBatch) => Promise<void>;
 
 export interface ListenerStatus {
   wsConnected: boolean;
+  wssEndpoint: string;
   lastProcessedBlock: string | null;
   lastBlockAt: string | null;
   reconnectAttempts: number;
@@ -45,6 +46,12 @@ const MAX_LOGS_RANGE = 100n;
 /** If no new head arrives for this long, assume the WSS subscription died
  *  silently (mainnet blocks land every ~12s). */
 const STALE_HEAD_MS = 45_000;
+
+/** Rotate to the next WSS endpoint after this many consecutive failed
+ *  reconnects on the current one. Backoff handles transient trouble;
+ *  rotation handles an endpoint that is down *for us* (e.g. a public node
+ *  blocking our cloud provider's egress IPs for hours). */
+const ROTATE_WSS_AFTER = 3;
 
 const RETRY = { baseMs: 500, capMs: 30_000, maxAttempts: 5 };
 
@@ -65,7 +72,8 @@ const RETRY = { baseMs: 500, capMs: 30_000, maxAttempts: 5 };
  *  - getLogs exhausts retries       -> range stays unprocessed; next head retries it
  */
 export class EventListener {
-  private httpClient: PublicClient;
+  private readonly wssPool = new EndpointPool(config.rpcWssUrls);
+  private readonly httpClients: PublicClient[];
   private wsClient: PublicClient | null = null;
   private unwatch: (() => void) | null = null;
 
@@ -79,10 +87,9 @@ export class EventListener {
   private watchdog: NodeJS.Timeout | null = null;
 
   constructor(private readonly onBatch: BatchHandler) {
-    this.httpClient = createPublicClient({
-      chain: mainnet,
-      transport: http(config.rpcHttpUrl),
-    });
+    this.httpClients = config.rpcHttpUrls.map((url) =>
+      createPublicClient({ chain: mainnet, transport: http(url) }),
+    );
   }
 
   start(): void {
@@ -99,6 +106,7 @@ export class EventListener {
   getStatus(): ListenerStatus {
     return {
       wsConnected: this.wsClient !== null,
+      wssEndpoint: this.wssPool.current,
       lastProcessedBlock: this.lastProcessedBlock?.toString() ?? null,
       lastBlockAt: this.lastBlockAt ? new Date(this.lastBlockAt).toISOString() : null,
       reconnectAttempts: this.reconnectAttempts,
@@ -110,14 +118,14 @@ export class EventListener {
   private subscribe(): void {
     if (this.stopped) return;
     logger.info("starting block subscription", {
-      wss: config.rpcWssUrl,
+      wss: this.wssPool.current,
       attempt: this.reconnectAttempts,
     });
 
     this.wsClient = createPublicClient({
       chain: mainnet,
       // We own the reconnect loop; disable viem's so the two don't fight.
-      transport: webSocket(config.rpcWssUrl, {
+      transport: webSocket(this.wssPool.current, {
         reconnect: false,
         keepAlive: { interval: 15_000 },
       }),
@@ -157,6 +165,20 @@ export class EventListener {
       capMs: 60_000,
     });
     this.reconnectAttempts++;
+
+    // Backoff alone can't outlast an endpoint that is down for our IP —
+    // after repeated failures, try a different provider.
+    if (
+      this.reconnectAttempts % ROTATE_WSS_AFTER === 0 &&
+      this.wssPool.size > 1
+    ) {
+      const next = this.wssPool.rotate();
+      logger.warn("rotating wss endpoint", {
+        endpoint: next,
+        consecutiveFailures: this.reconnectAttempts,
+      });
+    }
+
     logger.warn("reconnecting websocket", {
       reason,
       attempt: this.reconnectAttempts,
@@ -221,9 +243,11 @@ export class EventListener {
   }
 
   private async processRange(fromBlock: bigint, toBlock: bigint): Promise<void> {
+    // Each retry attempt lands on the next HTTP endpoint, so a provider
+    // that is throttling us doesn't get to fail all five attempts.
     const logs = await withRetry(
-      () =>
-        this.httpClient.getLogs({
+      (attempt) =>
+        this.httpClients[attempt % this.httpClients.length]!.getLogs({
           address: config.contractAddress,
           event: transferEvent,
           fromBlock,

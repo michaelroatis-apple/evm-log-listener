@@ -28,6 +28,38 @@ function isRateLimit(err: unknown): boolean {
   return /\b429\b|rate limit|too many requests/i.test(msg);
 }
 
+/**
+ * Round-robin pool of RPC endpoints.
+ *
+ * Backoff alone can't fix an endpoint that is effectively down for our IP
+ * (e.g. a public node blocking cloud-provider egress ranges for hours).
+ * The pool lets callers rotate to a different provider after repeated
+ * failures instead of hammering one host forever.
+ */
+export class EndpointPool {
+  private index = 0;
+
+  constructor(private readonly endpoints: readonly string[]) {
+    if (endpoints.length === 0) {
+      throw new Error("EndpointPool requires at least one endpoint");
+    }
+  }
+
+  get current(): string {
+    return this.endpoints[this.index]!;
+  }
+
+  get size(): number {
+    return this.endpoints.length;
+  }
+
+  /** Advance round-robin; returns the new current endpoint. */
+  rotate(): string {
+    this.index = (this.index + 1) % this.endpoints.length;
+    return this.current;
+  }
+}
+
 export interface RetryOptions extends BackoffOptions {
   /** Give up after this many attempts (the error is rethrown). */
   maxAttempts: number;
@@ -39,15 +71,18 @@ export interface RetryOptions extends BackoffOptions {
  * Retry an async operation with exponential backoff + jitter.
  * 429s get an extra flat penalty on top of the computed delay so we back
  * off harder when the node is explicitly telling us to slow down.
+ *
+ * The attempt index is passed to `fn` so callers can rotate across
+ * endpoints between attempts.
  */
 export async function withRetry<T>(
-  fn: () => Promise<T>,
+  fn: (attempt: number) => Promise<T>,
   opts: RetryOptions,
 ): Promise<T> {
   let lastError: unknown;
   for (let attempt = 0; attempt < opts.maxAttempts; attempt++) {
     try {
-      return await fn();
+      return await fn(attempt);
     } catch (err) {
       lastError = err;
       const rateLimited = isRateLimit(err);

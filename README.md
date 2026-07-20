@@ -45,6 +45,12 @@ range simply widens. **No block is ever skipped.**
 - WSS drops and subscription errors trigger reconnection with exponential
   backoff and full jitter (jitter avoids synchronized retry stampedes
   against public nodes).
+- **Endpoint failover**: after 3 consecutive failed reconnects the listener
+  rotates to the next WSS endpoint in `RPC_WSS_URLS`, and `getLogs` retries
+  rotate through `RPC_HTTP_URLS`. Backoff handles transient throttling;
+  rotation handles an endpoint that is down *for us* — observed in
+  production when a public node blocked our cloud provider's egress IPs
+  for hours. Defaults span three independent providers.
 - A watchdog detects silently dead subscriptions (no heads for 45s on a
   12s-block chain) and forces a reconnect.
 - `getLogs` calls retry with backoff; HTTP 429 responses receive an extra
@@ -108,8 +114,8 @@ header comment.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `RPC_WSS_URL` | `wss://ethereum-rpc.publicnode.com` | live block subscription |
-| `RPC_HTTP_URL` | `https://ethereum-rpc.publicnode.com` | log fetching / backfill |
+| `RPC_WSS_URLS` | publicnode, drpc, llamarpc | live block subscription — comma-separated failover list |
+| `RPC_HTTP_URLS` | publicnode, drpc, llamarpc | log fetching / backfill — retries rotate the list |
 | `CONTRACT_ADDRESS` | USDC mainnet | contract to index |
 | `TOKEN_DECIMALS` | `6` | human-readable volume formatting |
 | `REDIS_URL` | `redis://localhost:6379` | cache connection |

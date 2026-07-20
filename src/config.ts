@@ -18,11 +18,34 @@ function envAddress(name: string, fallback: string): Address {
   return value as Address;
 }
 
+/**
+ * Comma-separated endpoint list. Falls back to the singular env var for
+ * backward compatibility, then to public defaults across three providers —
+ * a single public host can block or throttle a whole cloud egress range,
+ * so diversity is the default.
+ */
+function envUrls(plural: string, singular: string, fallback: string): string[] {
+  const raw = process.env[plural] ?? process.env[singular] ?? fallback;
+  const urls = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  if (urls.length === 0) {
+    throw new Error(`${plural} must contain at least one URL`);
+  }
+  return urls;
+}
+
 export const config = {
-  /** WebSocket RPC endpoint for live subscriptions. */
-  rpcWssUrl: env("RPC_WSS_URL", "wss://ethereum-rpc.publicnode.com"),
-  /** HTTP RPC endpoint for gap backfill via eth_getLogs. */
-  rpcHttpUrl: env("RPC_HTTP_URL", "https://ethereum-rpc.publicnode.com"),
+  /** WebSocket RPC endpoints for live subscriptions (failover order). */
+  rpcWssUrls: envUrls(
+    "RPC_WSS_URLS",
+    "RPC_WSS_URL",
+    "wss://ethereum-rpc.publicnode.com,wss://eth.drpc.org,wss://eth.llamarpc.com",
+  ),
+  /** HTTP RPC endpoints for gap backfill via eth_getLogs (rotated on retry). */
+  rpcHttpUrls: envUrls(
+    "RPC_HTTP_URLS",
+    "RPC_HTTP_URL",
+    "https://ethereum-rpc.publicnode.com,https://eth.drpc.org,https://eth.llamarpc.com",
+  ),
   /** Contract whose Transfer events we index (default: USDC on mainnet). */
   contractAddress: envAddress(
     "CONTRACT_ADDRESS",
