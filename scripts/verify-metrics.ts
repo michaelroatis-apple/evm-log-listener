@@ -29,12 +29,12 @@ function batch(transfers: Array<[string, string, bigint]>, block: bigint): Trans
   return {
     fromBlock: block,
     toBlock: block,
-    transfers: transfers.map(([from, to, value]) => ({
+    transfers: transfers.map(([from, to, value], i) => ({
       from,
       to,
       value,
       blockNumber: block,
-      txHash: "0x" + "ab".repeat(32),
+      txHash: `0x${block.toString(16).padStart(8, "0")}${i.toString(16).padStart(56, "0")}`,
     })),
   };
 }
@@ -84,6 +84,20 @@ async function main() {
   assert(snap.topSenders[0]!.transfers === 4, "C has 4 transfers");
   assert(snap.topSenders[1]!.address === A.toLowerCase(), "A is second (2 transfers)");
   assert(snap.totalTransfersLastHour === 7, "7 transfers total");
+  assert(
+    snap.topReceivers[0]!.address === B.toLowerCase() && snap.topReceivers[0]!.transfers === 3,
+    "B is top receiver (3 transfers)",
+  );
+  assert(snap.largestTransfers.length > 0, "largest transfers recorded");
+  assert(
+    snap.largestTransfers[0]!.value === "100" &&
+      snap.largestTransfers[0]!.from === A.toLowerCase(),
+    "largest transfer is A's 100",
+  );
+  assert(
+    snap.largestTransfers.every((t, i, arr) => i === 0 || BigInt(arr[i - 1]!.value) >= BigInt(t.value)),
+    "largest transfers sorted descending",
+  );
   assert(snap.totalVolumeLastHour === "215", "total volume 215 raw units");
   assert(snap.volumeByMinute.length === 60, "60 minute buckets returned");
   assert(snap.spike.detected === false, "no spike on flat data");
