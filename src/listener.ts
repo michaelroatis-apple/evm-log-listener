@@ -220,9 +220,12 @@ export class EventListener {
     this.reconnecting = true;
     this.teardownWs();
 
+    // While polling carries the pipeline, WSS recovery is an optimization,
+    // not an emergency — probe calmly instead of thrashing the providers
+    // (and the logs) every 30-60s.
     const delay = backoffDelay(this.reconnectAttempts, {
       baseMs: 1_000,
-      capMs: 60_000,
+      capMs: this.pollTimer ? 300_000 : 60_000,
     });
     this.reconnectAttempts++;
 

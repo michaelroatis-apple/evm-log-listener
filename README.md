@@ -66,8 +66,9 @@ range simply widens. **No block is ever skipped.**
 - **HTTP polling fallback**: if WSS reconnects keep failing, the listener
   degrades to polling block numbers over the HTTP pool at block cadence, so
   data keeps flowing even with every WSS endpoint down. It switches back to
-  push the moment a WSS subscription recovers. The dashboard surfaces the
-  degraded mode. A single-endpoint pool (no failover possible) is warned
+  push the moment a WSS subscription recovers; while degraded, WSS retries
+  continue calmly in the background (~5 min cadence instead of thrashing).
+  The dashboard surfaces the degraded mode. A single-endpoint pool (no failover possible) is warned
   about loudly at boot.
 - **Cross-provider head-lag**: log fetches are anchored to the provider
   currently announcing heads — it definitionally has the block, while other
