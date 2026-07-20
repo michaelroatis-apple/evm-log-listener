@@ -49,6 +49,11 @@ export class EndpointPool {
     return this.endpoints[this.index]!;
   }
 
+  /** Position in the pool — lets callers align a second pool with this one. */
+  get currentIndex(): number {
+    return this.index;
+  }
+
   get size(): number {
     return this.endpoints.length;
   }

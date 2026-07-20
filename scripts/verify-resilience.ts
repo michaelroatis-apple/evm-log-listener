@@ -64,6 +64,7 @@ async function main() {
   assert(pool.current === "a", "pool starts at first endpoint");
   assert(pool.rotate() === "b" && pool.rotate() === "c", "pool rotates in order");
   assert(pool.rotate() === "a", "pool wraps around");
+  assert(pool.currentIndex === 0, "currentIndex tracks rotation");
   let poolThrew = false;
   try {
     new EndpointPool([]);

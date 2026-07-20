@@ -51,6 +51,10 @@ range simply widens. **No block is ever skipped.**
   rotation handles an endpoint that is down *for us* — observed in
   production when a public node blocked our cloud provider's egress IPs
   for hours. Defaults span three independent providers.
+- **Cross-provider head-lag**: log fetches are anchored to the provider
+  currently announcing heads — it definitionally has the block, while other
+  providers may briefly reject it as unknown. Retries rotate away from the
+  anchor so one provider can't consume the whole retry budget.
 - A watchdog detects silently dead subscriptions (no heads for 45s on a
   12s-block chain) and forces a reconnect.
 - `getLogs` calls retry with backoff; HTTP 429 responses receive an extra

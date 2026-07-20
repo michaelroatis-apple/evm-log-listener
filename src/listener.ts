@@ -243,11 +243,17 @@ export class EventListener {
   }
 
   private async processRange(fromBlock: bigint, toBlock: bigint): Promise<void> {
-    // Each retry attempt lands on the next HTTP endpoint, so a provider
-    // that is throttling us doesn't get to fail all five attempts.
+    // Anchor the first attempt to the provider currently serving WSS heads:
+    // the node that just announced this block definitionally has it, while
+    // other providers may lag a second or two behind ("Invalid parameters"
+    // for a block they haven't seen). Later attempts rotate away, so the
+    // anchor provider failing doesn't burn the whole retry budget.
+    // (With default config both pools list the same providers in the same
+    // order; if overridden unevenly, modulo keeps this safe, just unaligned.)
+    const anchor = this.wssPool.currentIndex;
     const logs = await withRetry(
       (attempt) =>
-        this.httpClients[attempt % this.httpClients.length]!.getLogs({
+        this.httpClients[(anchor + attempt) % this.httpClients.length]!.getLogs({
           address: config.contractAddress,
           event: transferEvent,
           fromBlock,
