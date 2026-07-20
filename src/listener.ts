@@ -33,6 +33,7 @@ export type BatchHandler = (batch: TransferBatch) => Promise<void>;
 export interface ListenerStatus {
   wsConnected: boolean;
   wssEndpoint: string;
+  headSource: "wss" | "polling";
   lastProcessedBlock: string | null;
   lastBlockAt: string | null;
   reconnectAttempts: number;
@@ -53,6 +54,11 @@ const STALE_HEAD_MS = 45_000;
 const ROTATE_WSS_AFTER = 3;
 
 const RETRY = { baseMs: 500, capMs: 30_000, maxAttempts: 5 };
+
+/** While WSS is down, fall back to polling the HTTP pool for new heads at
+ *  roughly block cadence. Slightly slower than push, but the pipeline keeps
+ *  flowing — WSS stops being a single point of failure. */
+const HEAD_POLL_INTERVAL_MS = 12_000;
 
 /** Providers are load-balanced clusters: the backend announcing a head over
  *  WSS isn't necessarily the backend answering the next HTTP call, and the
@@ -102,6 +108,8 @@ export class EventListener {
 
   private processing = Promise.resolve();
   private watchdog: NodeJS.Timeout | null = null;
+  private pollTimer: NodeJS.Timeout | null = null;
+  private pollIndex = 0;
 
   constructor(
     private readonly onBatch: BatchHandler,
@@ -149,6 +157,7 @@ export class EventListener {
   stop(): void {
     this.stopped = true;
     if (this.watchdog) clearInterval(this.watchdog);
+    this.stopPolling("shutdown");
     this.teardownWs();
   }
 
@@ -156,6 +165,7 @@ export class EventListener {
     return {
       wsConnected: this.wsClient !== null,
       wssEndpoint: this.wssPool.current,
+      headSource: this.pollTimer ? "polling" : "wss",
       lastProcessedBlock: this.lastProcessedBlock?.toString() ?? null,
       lastBlockAt: this.lastBlockAt ? new Date(this.lastBlockAt).toISOString() : null,
       reconnectAttempts: this.reconnectAttempts,
@@ -185,6 +195,7 @@ export class EventListener {
       onBlockNumber: (blockNumber) => {
         this.lastBlockAt = Date.now();
         this.reconnectAttempts = 0; // healthy again
+        this.stopPolling("wss recovered");
         this.enqueue(blockNumber);
       },
       onError: (err) => {
@@ -234,10 +245,47 @@ export class EventListener {
       delayMs: delay,
     });
 
+    // WSS has had its chances — keep data flowing over HTTP while the
+    // reconnect loop keeps trying in the background.
+    if (this.reconnectAttempts >= ROTATE_WSS_AFTER) {
+      this.startPolling();
+    }
+
     void sleep(delay).then(() => {
       this.reconnecting = false;
       this.subscribe();
     });
+  }
+
+  // ---- HTTP head-polling fallback ------------------------------------
+
+  private startPolling(): void {
+    if (this.pollTimer || this.stopped) return;
+    logger.warn("wss unavailable — falling back to http head polling", {
+      intervalMs: HEAD_POLL_INTERVAL_MS,
+    });
+    this.pollTimer = setInterval(() => void this.pollHead(), HEAD_POLL_INTERVAL_MS);
+    void this.pollHead();
+  }
+
+  private stopPolling(reason: string): void {
+    if (!this.pollTimer) return;
+    clearInterval(this.pollTimer);
+    this.pollTimer = null;
+    logger.info("stopping http head polling", { reason });
+  }
+
+  private async pollHead(): Promise<void> {
+    // Rotate providers per tick; a single failed tick just waits for the
+    // next one — the block will still be there.
+    const client = this.httpClients[this.pollIndex++ % this.httpClients.length]!;
+    try {
+      const head = await client.getBlockNumber();
+      this.lastBlockAt = Date.now();
+      this.enqueue(head);
+    } catch (err) {
+      logger.debug("head poll failed", { error: (err as Error).message });
+    }
   }
 
   private checkStale(): void {

@@ -63,6 +63,12 @@ range simply widens. **No block is ever skipped.**
   rotation handles an endpoint that is down *for us* — observed in
   production when a public node blocked our cloud provider's egress IPs
   for hours. Defaults span three independent providers.
+- **HTTP polling fallback**: if WSS reconnects keep failing, the listener
+  degrades to polling block numbers over the HTTP pool at block cadence, so
+  data keeps flowing even with every WSS endpoint down. It switches back to
+  push the moment a WSS subscription recovers. The dashboard surfaces the
+  degraded mode. A single-endpoint pool (no failover possible) is warned
+  about loudly at boot.
 - **Cross-provider head-lag**: log fetches are anchored to the provider
   currently announcing heads — it definitionally has the block, while other
   providers may briefly reject it as unknown. Retries rotate away from the

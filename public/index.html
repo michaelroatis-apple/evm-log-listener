@@ -151,6 +151,7 @@ function statusLine(l) {
   let host = "";
   try { host = new URL(l.wssEndpoint).host; } catch { host = l.wssEndpoint; }
   const parts = [`RPC: <span class="mono">${host}</span>`];
+  if (l.headSource === "polling") parts.push("degraded: HTTP head polling");
   if (l.reconnectAttempts > 0) parts.push(`reconnect attempts: ${l.reconnectAttempts}`);
   if (l.lastBlockAt) {
     const ageS = Math.round((Date.now() - new Date(l.lastBlockAt).getTime()) / 1000);
