@@ -27,3 +27,23 @@ export function createRedis(): Redis {
 
   return redis;
 }
+
+const CURSOR_KEY = "cursor:lastProcessedBlock";
+
+/**
+ * Persists the block cursor so a restart (deploy, crash, systemd restart)
+ * resumes where the previous run stopped and backfills its own downtime,
+ * instead of silently starting fresh at the current head.
+ */
+export class RedisCursorStore {
+  constructor(private readonly redis: Redis) {}
+
+  async load(): Promise<bigint | null> {
+    const raw = await this.redis.get(CURSOR_KEY);
+    return raw === null ? null : BigInt(raw);
+  }
+
+  async save(block: bigint): Promise<void> {
+    await this.redis.set(CURSOR_KEY, block.toString());
+  }
+}

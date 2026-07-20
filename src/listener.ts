@@ -55,6 +55,17 @@ const ROTATE_WSS_AFTER = 3;
 
 const RETRY = { baseMs: 500, capMs: 30_000, maxAttempts: 5 };
 
+/** Cap on startup backfill from a persisted cursor (~1h at 12s blocks).
+ *  The metric window is only 60 minutes, so blocks older than that carry
+ *  no useful signal — and ingestion-time bucketing would misplace them. */
+const MAX_STARTUP_GAP = 300n;
+
+/** Where the listener resumes from across restarts. */
+export interface CursorStore {
+  load(): Promise<bigint | null>;
+  save(block: bigint): Promise<void>;
+}
+
 /**
  * Resilient live event listener.
  *
@@ -86,13 +97,31 @@ export class EventListener {
   private processing = Promise.resolve();
   private watchdog: NodeJS.Timeout | null = null;
 
-  constructor(private readonly onBatch: BatchHandler) {
+  constructor(
+    private readonly onBatch: BatchHandler,
+    private readonly cursorStore?: CursorStore,
+  ) {
     this.httpClients = config.rpcHttpUrls.map((url) =>
       createPublicClient({ chain: mainnet, transport: http(url) }),
     );
   }
 
-  start(): void {
+  async start(): Promise<void> {
+    if (this.cursorStore) {
+      try {
+        const stored = await this.cursorStore.load();
+        if (stored !== null) {
+          this.lastProcessedBlock = stored;
+          logger.info("resuming from persisted cursor", {
+            lastProcessedBlock: stored.toString(),
+          });
+        }
+      } catch (err) {
+        logger.warn("could not load persisted cursor, starting from head", {
+          error: (err as Error).message,
+        });
+      }
+    }
     this.subscribe();
     this.watchdog = setInterval(() => this.checkStale(), 10_000);
   }
@@ -224,6 +253,19 @@ export class EventListener {
       this.lastProcessedBlock === null ? head : this.lastProcessedBlock + 1n;
     if (head < fromBlock) return; // duplicate/old head
 
+    // A persisted cursor can be arbitrarily stale (long outage between
+    // runs). Blocks older than the 1h metric window carry no signal, so
+    // skip ahead rather than replaying history into current-time buckets.
+    if (head - fromBlock + 1n > MAX_STARTUP_GAP) {
+      const skippedTo = head - MAX_STARTUP_GAP + 1n;
+      logger.warn("gap exceeds metric window, skipping ahead", {
+        cursorBlock: (fromBlock - 1n).toString(),
+        skippedTo: skippedTo.toString(),
+        skippedBlocks: (skippedTo - fromBlock).toString(),
+      });
+      fromBlock = skippedTo;
+    }
+
     if (head - fromBlock > 0n) {
       logger.info("backfilling missed blocks", {
         fromBlock: fromBlock.toString(),
@@ -238,6 +280,11 @@ export class EventListener {
         fromBlock + MAX_LOGS_RANGE - 1n < head ? fromBlock + MAX_LOGS_RANGE - 1n : head;
       await this.processRange(fromBlock, toBlock);
       this.lastProcessedBlock = toBlock;
+      // Fire-and-forget: cursor persistence is an optimization for the next
+      // restart; the current run's correctness never depends on it.
+      void this.cursorStore?.save(toBlock).catch((err) => {
+        logger.warn("cursor save failed", { error: (err as Error).message });
+      });
       fromBlock = toBlock + 1n;
     }
   }

@@ -1,7 +1,7 @@
 import { EventListener } from "./listener.js";
 import { logger } from "./logger.js";
 import { MetricsReader, MetricsWriter } from "./metrics.js";
-import { createRedis } from "./redis.js";
+import { createRedis, RedisCursorStore } from "./redis.js";
 import { startServer } from "./server.js";
 
 const redis = createRedis();
@@ -10,9 +10,9 @@ const reader = new MetricsReader(redis);
 
 const listener = new EventListener(async (batch) => {
   await writer.recordBatch(batch);
-});
+}, new RedisCursorStore(redis));
 
-listener.start();
+await listener.start();
 const server = startServer(listener, reader, redis);
 
 async function shutdown(signal: string) {
