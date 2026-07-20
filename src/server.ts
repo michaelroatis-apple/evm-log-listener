@@ -25,7 +25,12 @@ export function startServer(
       if (url === "/healthz") {
         const status = listener.getStatus();
         const healthy = redis.status === "ready";
-        res.writeHead(healthy ? 200 : 503, { "content-type": "application/json" });
+        res.writeHead(healthy ? 200 : 503, {
+          "content-type": "application/json",
+          // Health responses must never be served from a cache — a stale
+          // "ok" defeats the entire purpose of the endpoint.
+          "cache-control": "no-store",
+        });
         res.end(JSON.stringify({ ok: healthy, redis: redis.status, ...status }));
         return;
       }
